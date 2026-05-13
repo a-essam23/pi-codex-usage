@@ -23,7 +23,6 @@ pi install git:github.com/a-essam23/pi-codex-usage
 ```bash
 cp -r codex-usage ~/.pi/agent/extensions/
 cd ~/.pi/agent/extensions/codex-usage
-cp config.example.ts config.ts
 # Edit config.ts, then run /reload or restart pi
 ```
 
