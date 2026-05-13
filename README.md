@@ -36,6 +36,11 @@ cd ~/.pi/agent/extensions/codex-usage
 
 ## Configuration
 
+**Config file location:**
+```
+~/.pi/agent/git/github.com/a-essam23/pi-codex-usage/config.ts
+```
+
 Edit `config.ts`:
 
 ```typescript
@@ -74,13 +79,22 @@ export const config: Config = {
 
 ### Presets
 
-| Preset | Style |
-|--------|-------|
-| `subtle` | Dim until 95% (default) |
-| `minimal` | Compact, almost no color |
-| `standard` | Color bars at 70% |
-| `alert` | Color bars at 50% |
-| `compact` | No prefix, short bars |
+| Preset | Style | Best for |
+|--------|-------|----------|
+| `subtle` | Dim until 95% (default) | Clean, distraction-free |
+| `minimal` | Compact, almost no color | Screen space saving |
+| `standard` | Color bars at 70% | Early warning |
+| `alert` | Color bars at 50% | Aggressive monitoring |
+| `compact` | No prefix, short bars | Minimal footprint |
+
+**Switch presets:**
+```typescript
+import { minimal } from "./presets.js";  // Change this
+
+export const config: Config = {
+  ...minimal,  // And this
+};
+```
 
 ## How It Works
 
@@ -112,13 +126,79 @@ So the extension listens at every Codex turn end, but most turns only read the l
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `config.ts` | Your settings (gitignored) |
-| `config.example.ts` | Template config |
-| `constants.ts` | Runtime constants and default values |
-| `presets.ts` | Built-in visual/style presets |
-| `types.ts` | Type definitions |
-| `usage/codex-account-usage.json` | Latest snapshot (gitignored) |
-| `usage/codex-account-usage.jsonl` | History (if enabled, gitignored) |
-| `usage/codex-account-usage.lock` | Cross-session fetch lock (gitignored) |
+## Visual Customization Guide
+
+### Bar Characters
+
+Common choices for `barFilled` / `barEmpty`:
+
+| Style | Filled | Empty | Length suggestion |
+|-------|--------|-------|-------------------|
+| Blocks (default) | `█` | `░` | 10 |
+| Dense | `▓` | `░` | 12-16 |
+| Dots | `▪` | `▫` | 8-10 |
+| Dots 2 | `·` | ` ` | 8 |
+| Terminal | `\|` | `-` or `·` | 10-15 |
+| Arrows | `→` | `·` | 10 |
+
+### Colors
+
+Valid theme colors: `dim`, `success`, `warning`, `error`
+
+```typescript
+colors: {
+  prefix: "success",   // "CODEX" label color
+  bars: "dim",         // Default bar color
+  barsHigh: "error",   // Bar color when above threshold
+  labels: "warning",   // "5h", "7d" labels
+  text: "dim",         // Percentage numbers
+  reset: "success",    // "↻2h5m" reset timer
+}
+```
+
+### Custom Example
+
+```typescript
+import type { Config } from "./types.js";
+
+export const config: Config = {
+  // Start from scratch or extend a preset
+  prefix: "⚡",
+  barFilled: "▓",
+  barEmpty: "░",
+  barLength: 12,
+  barColorThreshold: 70,
+  
+  showSecondary: true,
+  showPercentages: true,
+  showReset: true,
+  
+  colors: {
+    prefix: "warning",
+    bars: "dim",
+    barsHigh: "error",
+    labels: "dim",
+    text: "dim",
+    reset: "success",
+  },
+  
+  // Thresholds affect caching speed
+  thresholds: {
+    primary: { danger: 90, warn: 75, normal: 50 },
+    secondary: { danger: 95, warn: 80 },
+  },
+};
+```
+
+## Files
+
+| File | Purpose | Location |
+|------|---------|----------|
+| `config.ts` | **Your settings (gitignored)** | `~/.pi/agent/git/github.com/a-essam23/pi-codex-usage/config.ts` |
+| `config.example.ts` | Template config | Same directory |
+| `constants.ts` | Default values | Same directory |
+| `presets.ts` | Built-in presets (`subtle`, `minimal`, etc.) | Same directory |
+| `types.ts` | TypeScript definitions | Same directory |
+| `usage/codex-account-usage.json` | Latest snapshot cache | `~/.pi/agent/extensions/codex-usage/usage/` |
+| `usage/codex-account-usage.jsonl` | History (if enabled) | Same directory |
+| `usage/codex-account-usage.lock` | Cross-session lock | Same directory |
