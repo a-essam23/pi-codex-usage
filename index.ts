@@ -374,9 +374,7 @@ function shortHash(value: string): string {
 }
 
 function getAccountKey(ctx: ExtensionContext, raw?: CodexAccountUsage): string {
-	const credential = ctx.modelRegistry.authStorage.get(CODEX_PROVIDER) as
-		| { type?: string; accountId?: unknown }
-		| undefined;
+	const credential = ctx.modelRegistry.authStorage.get(CODEX_PROVIDER)
 
 	// Prefer the credential account id because it is the same value we can read
 	// before fetching. The usage endpoint's account_id can be a different internal
@@ -563,7 +561,7 @@ async function fetchCodexAccountUsage(ctx: ExtensionContext): Promise<CodexAccou
 	if (!response.ok) {
 		throw new Error(`Codex usage request failed (${response.status}): ${text || response.statusText}`);
 	}
-	return JSON.parse(text) as CodexAccountUsage;
+	return JSON.parse(text);
 }
 
 function formatAccountUsage(snapshot: UsageSnapshot): string {
