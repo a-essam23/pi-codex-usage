@@ -5,8 +5,8 @@ Real-time ChatGPT/Codex account usage in your footer. Tracks actual quota from O
 ## Features
 
 - **Visual bars** — Configurable characters, colors, length
-- **Smart caching** — Auto-adjusts fetch rate based on usage (1-5 min TTL)
-- **Cross-session sync** — File-based locking prevents duplicate API calls
+- **Smart caching** — Auto-adjusts fetch rate based on usage with configurable TTLs
+- **Cross-session sync** — Extension-local file cache and locking prevent duplicate API calls
 - **Account-aware cache** — Avoids showing another logged-in Codex account's snapshot
 - **Auto-hide** — Disappears when not using Codex (optional)
 
@@ -32,6 +32,9 @@ cp config.example.ts config.ts
 Edit `config.ts`:
 
 ```typescript
+import { subtle } from "./presets.js";
+import type { Config } from "./types.js";
+
 export const config: Config = {
   ...subtle,              // Start from preset
   prefix: "CODEX",        // "Codex", "C", or ""
@@ -46,6 +49,16 @@ export const config: Config = {
   disableIfNotCodex: true,// Hide for non-Codex models
   enableHistory: true,    // Keep usage history JSONL
   
+  // Cache/fetch behavior
+  pollIntervalMs: 5_000,  // Local file polling only, no network
+  lockStaleMs: 30_000,    // Treat abandoned lock files as stale
+  cacheTtlMs: {
+    danger: 60_000,       // Primary >= danger threshold, limit reached, or disallowed
+    warn: 120_000,        // Primary >= warn threshold
+    normal: 180_000,      // Primary >= normal threshold
+    low: 300_000,         // Primary below normal threshold
+  },
+
   // Advanced
   barColorThreshold: 95,  // Color bars above %
   lockFilePath: undefined,// Custom lock file path
@@ -64,13 +77,22 @@ export const config: Config = {
 
 ## How It Works
 
-1. **Local polling** — Reads snapshot every 5s (fast, no network)
-2. **Remote fetch** — Calls OpenAI when stale or when you force refresh
-3. **Adaptive TTL** — High usage = frequent updates:
-   - ≥danger threshold: 1 min
-   - ≥warn threshold: 2 min
-   - ≥normal threshold: 3 min
-   - Low usage: 5 min
+1. **Local polling** — Reads `usage/codex-account-usage.json` every 5s (fast, no network)
+2. **Event-driven refresh** — On session start, model change, and Codex turn end, it checks whether the cached snapshot is still fresh
+3. **Remote fetch** — Calls OpenAI only when the snapshot is missing, stale, force-refreshed, or a limit/rate/quota error is detected
+4. **Adaptive TTL** — Freshness is based on snapshot age, current usage, and `config.cacheTtlMs`:
+   - ≥danger threshold: fresh for `cacheTtlMs.danger` (default 1 min)
+   - ≥warn threshold: fresh for `cacheTtlMs.warn` (default 2 min)
+   - ≥normal threshold: fresh for `cacheTtlMs.normal` (default 3 min)
+   - Low usage: fresh for `cacheTtlMs.low` (default 5 min)
+
+Freshness check:
+
+```typescript
+isFresh = Date.now() - new Date(snapshot.fetchedAt).getTime() < refreshTtlMs(snapshot)
+```
+
+So the extension listens at every Codex turn end, but most turns only read the local cache file and do **not** call OpenAI.
 
 ## Troubleshooting
 
@@ -79,14 +101,17 @@ export const config: Config = {
 | "Not logged in" | Run `/login openai-codex` |
 | Changes not showing | Run `/reload`; if still stale, full restart: `/quit` then `pi` |
 | Footer missing | Check `/codex-usage hide`, run `/reload`, or confirm model provider is `openai-codex` |
-| Reset cache | `rm ~/.pi/agent/usage/codex-account-usage.json` |
+| Reset cache | `rm ~/.pi/agent/extensions/codex-usage/usage/codex-account-usage.json` |
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `config.ts` | Your settings (gitignored) |
-| `config.example.ts` | Template with presets |
+| `config.example.ts` | Template config |
+| `constants.ts` | Runtime constants and default values |
+| `presets.ts` | Built-in visual/style presets |
 | `types.ts` | Type definitions |
-| `~/.pi/agent/usage/codex-account-usage.json` | Latest snapshot |
-| `~/.pi/agent/usage/codex-account-usage.jsonl` | History (if enabled) |
+| `usage/codex-account-usage.json` | Latest snapshot (gitignored) |
+| `usage/codex-account-usage.jsonl` | History (if enabled, gitignored) |
+| `usage/codex-account-usage.lock` | Cross-session fetch lock (gitignored) |

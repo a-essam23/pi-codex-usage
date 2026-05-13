@@ -25,20 +25,21 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { config } from "./config.js";
+import {
+	CODEX_PROVIDER,
+	CODEX_RESPONSES_API,
+	CODEX_USAGE_ENDPOINT,
+	HISTORY_FILE_NAME,
+	LOCK_FILE_NAME,
+	SNAPSHOT_FILE_NAME,
+	STATUS_KEY,
+	USAGE_DIR_NAME,
+} from "./constants.js";
 import type { ExtensionContext, UsageSnapshot, CodexAccountUsage, SanitizedUsage, DataState, VisibilityState, UsageWindow } from "./types.js";
-
-const PROVIDER = "openai-codex";
-const ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
-const STATUS_KEY = "codex-usage";
-const POLL_LOCAL_SNAPSHOT_MS = config.pollIntervalMs;
-const LOCK_STALE_MS = 30_000;
-
-const BLOCKS = config.barLength;
 
 // ============================================================================
 // STATE
@@ -97,7 +98,7 @@ class UsageTracker {
 
 	// Check current model and update visibility state
 	private checkModelAndUpdate(ctx: ExtensionContext): void {
-		const isCodex = ctx.model?.provider === PROVIDER;
+		const isCodex = ctx.model?.provider === CODEX_PROVIDER;
 		const wasVisible = this.visibilityState.kind === "visible";
 
 		if (this.visibilityState.kind === "hidden-user") {
@@ -134,7 +135,7 @@ class UsageTracker {
 				this.dataState = { kind: "no-data" };
 			}
 			this.render(this.currentCtx);
-		}, POLL_LOCAL_SNAPSHOT_MS);
+		}, config.pollIntervalMs);
 	}
 
 	private stopPolling(): void {
@@ -332,7 +333,7 @@ class UsageTracker {
 
 	private isCodexMessage(message: unknown): message is AssistantMessage {
 		const msg = message as Partial<AssistantMessage> | undefined;
-		return msg?.role === "assistant" && (msg.provider === PROVIDER || msg.api === "openai-codex-responses");
+		return msg?.role === "assistant" && (msg.provider === CODEX_PROVIDER || msg.api === CODEX_RESPONSES_API);
 	}
 
 	private isLimitError(message: AssistantMessage): boolean {
@@ -344,24 +345,24 @@ class UsageTracker {
 // PURE FUNCTIONS (no side effects, easily testable)
 // ============================================================================
 
-function getAgentDir(): string {
-	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+function getExtensionDir(): string {
+	return __dirname;
 }
 
 function getUsageDir(): string {
-	return join(getAgentDir(), "usage");
+	return join(getExtensionDir(), USAGE_DIR_NAME);
 }
 
 function getSnapshotFile(): string {
-	return join(getUsageDir(), "codex-account-usage.json");
+	return join(getUsageDir(), SNAPSHOT_FILE_NAME);
 }
 
 function getHistoryFile(): string {
-	return join(getUsageDir(), "codex-account-usage.jsonl");
+	return join(getUsageDir(), HISTORY_FILE_NAME);
 }
 
 function getLockFile(): string {
-	return config.lockFilePath || join(getUsageDir(), "codex-account-usage.lock");
+	return config.lockFilePath || join(getUsageDir(), LOCK_FILE_NAME);
 }
 
 function ensureUsageDir(): void {
@@ -373,7 +374,7 @@ function shortHash(value: string): string {
 }
 
 function getAccountKey(ctx: ExtensionContext, raw?: CodexAccountUsage): string {
-	const credential = ctx.modelRegistry.authStorage.get(PROVIDER) as
+	const credential = ctx.modelRegistry.authStorage.get(CODEX_PROVIDER) as
 		| { type?: string; accountId?: unknown }
 		| undefined;
 
@@ -397,7 +398,7 @@ function buildSnapshot(ctx: ExtensionContext, raw: CodexAccountUsage): UsageSnap
 		version: 1,
 		fetchedAt: new Date().toISOString(),
 		account: getAccountKey(ctx, raw),
-		source: ENDPOINT,
+		source: CODEX_USAGE_ENDPOINT,
 		usage: sanitizeUsage(raw),
 	};
 }
@@ -446,7 +447,7 @@ function acquireLock(): number | undefined {
 		if (code !== "EEXIST") throw error;
 		try {
 			const stat = statSync(lockFile);
-			if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+			if (Date.now() - stat.mtimeMs > config.lockStaleMs) {
 				unlinkSync(lockFile);
 				return openSync(lockFile, "wx");
 			}
@@ -515,15 +516,15 @@ function refreshTtlMs(snapshot?: UsageSnapshot): number {
 	const primary = rate?.primary_window?.used_percent ?? 0;
 	// Use config thresholds for dynamic TTL
 	if (rate?.allowed === false || rate?.limit_reached || primary >= config.thresholds.primary.danger) {
-		return 60_000; // 1 min when danger
+		return config.cacheTtlMs.danger;
 	}
 	if (primary >= config.thresholds.primary.warn) {
-		return 120_000; // 2 min when warn
+		return config.cacheTtlMs.warn;
 	}
 	if (primary >= config.thresholds.primary.normal) {
-		return 180_000; // 3 min when normal-high
+		return config.cacheTtlMs.normal;
 	}
-	return 300_000; // 5 min when low usage
+	return config.cacheTtlMs.low;
 }
 
 function snapshotAgeMs(snapshot?: UsageSnapshot): number {
@@ -536,10 +537,10 @@ function isFresh(snapshot?: UsageSnapshot): boolean {
 }
 
 async function fetchCodexAccountUsage(ctx: ExtensionContext): Promise<CodexAccountUsage> {
-	const token = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER);
+	const token = await ctx.modelRegistry.getApiKeyForProvider(CODEX_PROVIDER);
 	if (!token) throw new Error("Not logged into OpenAI Codex. Run /login openai-codex first.");
 
-	const credential = ctx.modelRegistry.authStorage.get(PROVIDER) as
+	const credential = ctx.modelRegistry.authStorage.get(CODEX_PROVIDER) as
 		| { type?: string; accountId?: unknown }
 		| undefined;
 
@@ -557,7 +558,7 @@ async function fetchCodexAccountUsage(ctx: ExtensionContext): Promise<CodexAccou
 		headers["chatgpt-account-id"] = credential.accountId;
 	}
 
-	const response = await fetch(ENDPOINT, { headers, signal: ctx.signal });
+	const response = await fetch(CODEX_USAGE_ENDPOINT, { headers, signal: ctx.signal });
 	const text = await response.text();
 	if (!response.ok) {
 		throw new Error(`Codex usage request failed (${response.status}): ${text || response.statusText}`);
@@ -591,8 +592,8 @@ function formatAccountUsage(snapshot: UsageSnapshot): string {
 
 function usageBar(percent: number | undefined, theme: ExtensionContext["ui"]["theme"]): string {
 	const value = Math.max(0, Math.min(100, Math.round(percent ?? 0)));
-	const filled = Math.round((value / 100) * BLOCKS);
-	const empty = BLOCKS - filled;
+	const filled = Math.round((value / 100) * config.barLength);
+	const empty = config.barLength - filled;
 	const raw = `${config.barFilled.repeat(filled)}${config.barEmpty.repeat(empty)}`;
 
 	if (value >= config.barColorThreshold) {

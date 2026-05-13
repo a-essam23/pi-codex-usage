@@ -3,5 +3,6 @@
 config.ts
 
 # Runtime files
+usage/
 *.log
 *.tmp

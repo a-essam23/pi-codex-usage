@@ -82,8 +82,23 @@ export type VisibilityState =
 // ============================================================================
 
 export interface Config {
-	/** How often to poll the local snapshot file (milliseconds) */
+	/** How often to poll the local snapshot file (milliseconds). No network calls. */
 	pollIntervalMs: number;
+
+	/** Treat abandoned lock files as stale after this many milliseconds */
+	lockStaleMs: number;
+
+	/** Cache freshness TTLs by usage level (milliseconds) */
+	cacheTtlMs: {
+		/** Used when limit is reached/disallowed or primary usage >= danger threshold */
+		danger: number;
+		/** Used when primary usage >= warn threshold */
+		warn: number;
+		/** Used when primary usage >= normal threshold */
+		normal: number;
+		/** Used when primary usage is below normal threshold */
+		low: number;
+	};
 
 	/** If true, completely hide the status when not using a Codex model */
 	disableIfNotCodex: boolean;
@@ -91,7 +106,7 @@ export interface Config {
 	/** If true, enable the JSONL history file (for debugging/trends) */
 	enableHistory: boolean;
 
-	/** Custom lock file path (default: ~/.pi/agent/usage/codex.lock) */
+	/** Custom lock file path (default: <extension>/usage/codex-account-usage.lock) */
 	lockFilePath?: string;
 
 	/**
