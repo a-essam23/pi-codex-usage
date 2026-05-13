@@ -2,6 +2,8 @@
 
 Real-time ChatGPT/Codex account usage in your footer. Tracks actual quota from OpenAI's API.
 
+![Codex Usage Preview](codex-usage-preview.png)
+
 ## Features
 
 - **Visual bars** — Configurable characters, colors, length
