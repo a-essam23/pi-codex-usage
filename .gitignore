@@ -1,0 +1,7 @@
+# User's personal configuration - do not commit
+# Copy from config.example.ts and customize
+config.ts
+
+# Runtime files
+*.log
+*.tmp
