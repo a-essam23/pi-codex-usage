@@ -50,6 +50,8 @@ class UsageTracker {
 	private visibilityState: VisibilityState = { kind: "visible" };
 	private currentCtx: ExtensionContext | undefined;
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
+	private pollRefreshInFlight = false;
+	private lastPollRefreshAttemptAt = 0;
 
 	// Start the extension
 	start(pi: ExtensionAPI): void {
@@ -126,16 +128,39 @@ class UsageTracker {
 	private startPolling(): void {
 		this.stopPolling();
 		this.pollTimer = setInterval(() => {
-			if (!this.currentCtx) return;
-			// Just re-read snapshot and re-render - fetching is separate
-			const snapshot = readSnapshotForContext(this.currentCtx);
+			const ctx = this.currentCtx;
+			if (!ctx) return;
+
+			const snapshot = readSnapshotForContext(ctx);
 			if (snapshot) {
 				this.setSnapshotState(snapshot);
 			} else if (this.dataState.kind !== "fetching") {
 				this.dataState = { kind: "no-data" };
 			}
-			this.render(this.currentCtx);
+			this.render(ctx);
+
+			// If a reset boundary passed while pi was idle, refresh automatically so
+			// the footer doesn't keep showing the pre-reset 100% snapshot forever.
+			if (snapshot && this.visibilityState.kind === "visible" && !isFresh(snapshot)) {
+				void this.refreshFromPolling(ctx);
+			}
 		}, config.pollIntervalMs);
+	}
+
+	private async refreshFromPolling(ctx: ExtensionContext): Promise<void> {
+		if (this.pollRefreshInFlight) return;
+
+		// Avoid retrying every local poll if the network/auth endpoint is failing.
+		const minRetryMs = Math.max(config.pollIntervalMs, config.cacheTtlMs.danger);
+		if (Date.now() - this.lastPollRefreshAttemptAt < minRetryMs) return;
+
+		this.pollRefreshInFlight = true;
+		this.lastPollRefreshAttemptAt = Date.now();
+		try {
+			await this.maybeRefresh(ctx, { allowStale: true });
+		} finally {
+			this.pollRefreshInFlight = false;
+		}
 	}
 
 	private stopPolling(): void {
@@ -493,9 +518,23 @@ function windowLabel(window?: UsageWindow): string {
 	return formatDuration(seconds);
 }
 
-function currentResetAfterSeconds(window?: UsageWindow): number | undefined {
+function currentResetAfterSeconds(window?: UsageWindow, fetchedAt?: string): number | undefined {
 	if (window?.reset_at) return Math.max(0, Math.round(window.reset_at - Date.now() / 1000));
-	return window?.reset_after_seconds;
+	if (window?.reset_after_seconds === undefined) return undefined;
+	if (!fetchedAt) return window.reset_after_seconds;
+
+	const fetchedAtSeconds = new Date(fetchedAt).getTime() / 1000;
+	if (!Number.isFinite(fetchedAtSeconds)) return window.reset_after_seconds;
+	return Math.max(0, Math.round(fetchedAtSeconds + window.reset_after_seconds - Date.now() / 1000));
+}
+
+function hasWindowReset(window: UsageWindow | undefined, fetchedAt: string): boolean {
+	return currentResetAfterSeconds(window, fetchedAt) === 0;
+}
+
+function hasAnyUsageWindowReset(snapshot: UsageSnapshot): boolean {
+	const rate = snapshot.usage.rate_limit;
+	return hasWindowReset(rate?.primary_window, snapshot.fetchedAt) || hasWindowReset(rate?.secondary_window, snapshot.fetchedAt);
 }
 
 function formatWindowLine(label: string, window?: UsageWindow): string {
@@ -531,6 +570,8 @@ function snapshotAgeMs(snapshot?: UsageSnapshot): number {
 }
 
 function isFresh(snapshot?: UsageSnapshot): boolean {
+	if (!snapshot) return false;
+	if (hasAnyUsageWindowReset(snapshot)) return false;
 	return snapshotAgeMs(snapshot) < refreshTtlMs(snapshot);
 }
 
@@ -606,7 +647,7 @@ function formatStatus(snapshot: UsageSnapshot, ctx: ExtensionContext): string {
 	const rate = usage.rate_limit;
 	const primary = rate?.primary_window;
 	const p = Math.round(primary?.used_percent ?? 0);
-	const reset = formatDuration(currentResetAfterSeconds(primary));
+	const reset = formatDuration(currentResetAfterSeconds(primary, snapshot.fetchedAt));
 
 	const pBar = usageBar(p, ctx.ui.theme);
 

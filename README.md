@@ -102,8 +102,8 @@ export const config: Config = {
 
 1. **Local polling** — Reads `usage/codex-account-usage.json` every 5s (fast, no network)
 2. **Event-driven refresh** — On session start, model change, and Codex turn end, it checks whether the cached snapshot is still fresh
-3. **Remote fetch** — Calls OpenAI only when the snapshot is missing, stale, force-refreshed, or a limit/rate/quota error is detected
-4. **Adaptive TTL** — Freshness is based on snapshot age, current usage, and `config.cacheTtlMs`:
+3. **Remote fetch** — Calls OpenAI only when the snapshot is missing, stale, force-refreshed, a reset boundary has passed, or a limit/rate/quota error is detected
+4. **Adaptive TTL** — Freshness is based on snapshot age, current usage, reset timers, and `config.cacheTtlMs`:
    - ≥danger threshold: fresh for `cacheTtlMs.danger` (default 1 min)
    - ≥warn threshold: fresh for `cacheTtlMs.warn` (default 2 min)
    - ≥normal threshold: fresh for `cacheTtlMs.normal` (default 3 min)
@@ -115,7 +115,7 @@ Freshness check:
 isFresh = Date.now() - new Date(snapshot.fetchedAt).getTime() < refreshTtlMs(snapshot)
 ```
 
-So the extension listens at every Codex turn end, but most turns only read the local cache file and do **not** call OpenAI.
+So the extension listens at every Codex turn end, but most turns only read the local cache file and do **not** call OpenAI. The local poller can also trigger a throttled refresh after a usage window reset so the footer does not keep showing pre-reset usage while pi is idle.
 
 ## Troubleshooting
 
