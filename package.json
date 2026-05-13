@@ -1,0 +1,26 @@
+{
+  "name": "pi-codex-usage",
+  "version": "0.1.0",
+  "description": "Pi extension that shows ChatGPT/Codex account usage in the footer.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "codex",
+    "usage"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/a-essam23/pi-codex-usage.git"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

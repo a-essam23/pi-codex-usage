@@ -12,6 +12,14 @@ Real-time ChatGPT/Codex account usage in your footer. Tracks actual quota from O
 
 ## Install
 
+### Pi package
+
+```bash
+pi install git:github.com/a-essam23/pi-codex-usage
+```
+
+### Manual install
+
 ```bash
 cp -r codex-usage ~/.pi/agent/extensions/
 cd ~/.pi/agent/extensions/codex-usage
