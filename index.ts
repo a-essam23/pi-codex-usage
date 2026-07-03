@@ -131,24 +131,32 @@ class UsageTracker {
 			const ctx = this.currentCtx;
 			if (!ctx) return;
 
-			const snapshot = readSnapshotForContext(ctx);
-			if (snapshot) {
-				this.setSnapshotState(snapshot);
-			} else if (this.dataState.kind !== "fetching") {
-				this.dataState = { kind: "no-data" };
-			}
-			this.render(ctx);
+			try {
+				const snapshot = readSnapshotForContext(ctx);
+				if (snapshot) {
+					this.setSnapshotState(snapshot);
+				} else if (this.dataState.kind !== "fetching") {
+					this.dataState = { kind: "no-data" };
+				}
+				this.render(ctx);
 
-			// If a reset boundary passed while pi was idle, refresh automatically so
-			// the footer doesn't keep showing the pre-reset 100% snapshot forever.
-			if (snapshot && this.visibilityState.kind === "visible" && !isFresh(snapshot)) {
-				void this.refreshFromPolling(ctx);
+				// If a reset boundary passed while pi was idle, refresh automatically so
+				// the footer doesn't keep showing the pre-reset 100% snapshot forever.
+				if (snapshot && this.visibilityState.kind === "visible" && !isFresh(snapshot)) {
+					void this.refreshFromPolling(ctx);
+				}
+			} catch (error) {
+				if (isStaleContextError(error)) {
+					this.clearStaleContext(ctx);
+					return;
+				}
+				throw error;
 			}
 		}, config.pollIntervalMs);
 	}
 
 	private async refreshFromPolling(ctx: ExtensionContext): Promise<void> {
-		if (this.pollRefreshInFlight) return;
+		if (this.pollRefreshInFlight || !this.isCurrentContext(ctx)) return;
 
 		// Avoid retrying every local poll if the network/auth endpoint is failing.
 		const minRetryMs = Math.max(config.pollIntervalMs, config.cacheTtlMs.danger);
@@ -158,6 +166,12 @@ class UsageTracker {
 		this.lastPollRefreshAttemptAt = Date.now();
 		try {
 			await this.maybeRefresh(ctx, { allowStale: true });
+		} catch (error) {
+			if (isStaleContextError(error)) {
+				this.clearStaleContext(ctx);
+				return;
+			}
+			throw error;
 		} finally {
 			this.pollRefreshInFlight = false;
 		}
@@ -170,11 +184,24 @@ class UsageTracker {
 		}
 	}
 
+	private isCurrentContext(ctx: ExtensionContext): boolean {
+		return this.currentCtx === ctx;
+	}
+
+	private clearStaleContext(ctx: ExtensionContext): void {
+		if (this.currentCtx === ctx) {
+			this.currentCtx = undefined;
+		}
+		this.stopPolling();
+	}
+
 	// Decide whether to fetch based on data state
 	private async maybeRefresh(
 		ctx: ExtensionContext,
 		opts: { force?: boolean; allowStale?: boolean } = {},
 	): Promise<void> {
+		if (!this.isCurrentContext(ctx)) return;
+
 		const snapshot = readSnapshotForContext(ctx);
 
 		if (snapshot && !opts.force && isFresh(snapshot)) {
@@ -200,7 +227,16 @@ class UsageTracker {
 	}
 
 	private setErrorState(error: unknown, ctx: ExtensionContext): void {
-		const fallback = readSnapshotForContext(ctx);
+		let fallback: UsageSnapshot | undefined;
+		try {
+			fallback = readSnapshotForContext(ctx);
+		} catch (snapshotError) {
+			if (isStaleContextError(snapshotError)) {
+				this.clearStaleContext(ctx);
+				return;
+			}
+			throw snapshotError;
+		}
 		this.dataState = {
 			kind: "error",
 			error: error instanceof Error ? error.message : String(error),
@@ -209,7 +245,9 @@ class UsageTracker {
 	}
 
 	private async fetchRemoteAndStore(ctx: ExtensionContext): Promise<CodexAccountUsage> {
+		if (!this.isCurrentContext(ctx)) throw new StaleUsageContextError();
 		const raw = await fetchCodexAccountUsage(ctx);
+		if (!this.isCurrentContext(ctx)) throw new StaleUsageContextError();
 		const snapshot = buildSnapshot(ctx, raw);
 		writeSnapshot(snapshot);
 		this.dataState = { kind: "fresh", snapshot };
@@ -218,10 +256,13 @@ class UsageTracker {
 
 	// Fetch with global file lock
 	private async fetchWithLock(ctx: ExtensionContext, opts: { force?: boolean } = {}): Promise<void> {
+		if (!this.isCurrentContext(ctx)) return;
+
 		const lock = acquireLock();
 		if (lock === undefined) {
 			// Another process is fetching - wait and read result
 			await sleep(1000);
+			if (!this.isCurrentContext(ctx)) return;
 			const latest = readSnapshotForContext(ctx);
 			if (latest) {
 				this.setSnapshotState(latest);
@@ -232,6 +273,7 @@ class UsageTracker {
 
 		// We have the lock - must release it in all paths
 		try {
+			if (!this.isCurrentContext(ctx)) return;
 			// Double-check after acquiring lock. Forced refresh bypasses cache freshness.
 			const latest = readSnapshotForContext(ctx);
 			if (!opts.force && latest && isFresh(latest)) {
@@ -245,15 +287,20 @@ class UsageTracker {
 
 			await this.fetchRemoteAndStore(ctx);
 		} catch (error) {
+			if (isStaleContextError(error)) {
+				this.clearStaleContext(ctx);
+				return;
+			}
 			this.setErrorState(error, ctx);
 		} finally {
 			releaseLock(lock);
-			this.render(ctx);
+			if (this.isCurrentContext(ctx)) this.render(ctx);
 		}
 	}
 
 	// Render based on current states
 	private render(ctx: ExtensionContext): void {
+		if (!this.isCurrentContext(ctx)) return;
 		if (!ctx.hasUI) return;
 
 		// Determine what to show based on visibility state
@@ -369,6 +416,20 @@ class UsageTracker {
 // ============================================================================
 // PURE FUNCTIONS (no side effects, easily testable)
 // ============================================================================
+
+class StaleUsageContextError extends Error {
+	constructor() {
+		super("Codex usage context became stale");
+		this.name = "StaleUsageContextError";
+	}
+}
+
+function isStaleContextError(error: unknown): boolean {
+	return (
+		error instanceof StaleUsageContextError ||
+		(error instanceof Error && /extension ctx is stale|context became stale/i.test(error.message))
+	);
+}
 
 function getExtensionDir(): string {
 	return __dirname;
